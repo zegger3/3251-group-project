@@ -72,30 +72,25 @@ def init():
         #in the network via the poc so connect to all of them
         connect_to_network()
 
-        #Peer discovery is completed. We can now start calculating RTT and find the
-        #hub node
+        #Peer discovery is completed. We can now start calculating RTT and find the hub node
 
     recivingThread = ReceivingThread(0, "Recieving Thread")
     recivingThread.setDaemon(True)
     recivingThread.start()
 
-     #----------------------------------
-    #TODO: do RTT stuff and find hub
-    #----------------------------------
     rttThread = RTTThread(11, "rttThread")
     rttThread.setDaemon(True)
     rttThread.start()
 
 
     #TODO:
-    #send/receive messages, do RTT measurements,
-    #Heartbeat stuff, and handle commands by the user
-    command = input("Star-Node Command: ")
+    #implement Heartbeat 
+    command = raw_input("Star-Node Command: ")
 
     while not command == 'disconnect':
 
         if command == 'show-status':
-            print("Status ================")
+            print("Status:")
             print(connections)
             for x in connections:
                 print(x + " : " + str(connections[x]) + " : " + str(RTTs[connections[x]]))
@@ -106,16 +101,15 @@ def init():
                     print(x)
                     break
         elif 'send' in command:
-            # sending data logic
 
             info = command[5:]
             if hubNode is None or hubNode == my_address:
                 addresses = connections.values()
             else:
                 addresses = [hubNode]
+            #have to put quotes around messages but Can't figure a way around it due to being able to send files as well
             if "\"" in info:
                 parsed_message = str(info[1:-1])
-
                 messageThread = SendMessageThread(0, 'Send Message', parsed_message, addresses)
                 messageThread.setDaemon(True)
                 messageThread.start()
@@ -131,11 +125,11 @@ def init():
             for log in logs:
                 print(log)
 
-        command = input("Star-Node Command: ")
+        command = raw_input("Star-Node Command: ")
 
     print("disconnecting")
     sys.exit()
-    #TODO handle the disconnect command
+    #TODO handle the disconnect command more properly
     
 def startupCheck():
     name = selfData[1]
@@ -153,13 +147,11 @@ def startupCheck():
     if(type(localPort) is int):
         checkList[1] = True
         print("Local Port #, CHECK")
-        
     
-    
-    if( type(POC_Port) is int):
+    if(type(POC_Port) is int):
         checkList[3] = True
         
-    if( type(Net_Size) is int):
+    if(type(Net_Size) is int):
         checkList[4] = True
         
     for item in checkList:
@@ -206,7 +198,7 @@ class ReceivingThread(threading.Thread):
         while True:
             data, recieved_address = client_socket.recvfrom(64000)
 
-            #parsing of all recieved messages occurs here
+            #parse recieved messages
             try:
                 packet = json.loads(data.decode('utf-8'))
             except Exception as e:
@@ -248,6 +240,12 @@ class ReceivingThread(threading.Thread):
                                 logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hubNode))
 
 
+            elif packet_type == PacketType.RTT_REQ:
+                logs.append(str(datetime.now().time()) + ' RTT Request Recieved: ' + str(recieved_address))
+
+                rttResponseThread = RTTResponseThread(0, 'RTTResponseThread', recieved_address)
+                rttResponseThread.start()
+
             elif packet_type == PacketType.RTT_RES:
                 logs.append(
                     str(datetime.now().time()) + ' RTT Response Recieved: ' + str(recieved_address))
@@ -264,12 +262,6 @@ class ReceivingThread(threading.Thread):
                     sendSumThread.start()
                     rttReceived = 0
 
-            elif packet_type == PacketType.RTT_REQ:
-                logs.append(str(datetime.now().time()) + ' RTT Request Recieved: ' + str(recieved_address))
-
-                rttResponseThread = RTTResponseThread(0, 'RTTResponseThread', recieved_address)
-                rttResponseThread.start()
-
             elif packet_type == PacketType.MESSAGE_TEXT:
                 logs.append(str(datetime.now().time()) + ' Message Recieved: ' + str(recieved_address) + ' : ' + str(packet['message']))
                 print("new message received from " + str(recieved_address) + ": "+ str(packet['message']))
@@ -282,9 +274,10 @@ class ReceivingThread(threading.Thread):
                     sendMessage = SendMessageThread(0, 'SendMessageThread', packet['message'], addresses)
                     sendMessage.setDaemon(True)
                     sendMessage.start()
+
             elif packet_type == PacketType.MESSAGE_FILE:
                 logs.append(str(datetime.now().time()) + ' File Recieved: ' + str(recieved_address))
-                print("new file received from " + str(recieved_address))#don't want to print the whole file #+ ": "+ str(packet['message']))
+                print("new file received from " + str(recieved_address))
                 if hubNode == my_address:
                     addresses = []
                     for connection in connections:
@@ -307,8 +300,7 @@ class ReceivingThread(threading.Thread):
                 connectionResponseThread.setDaemon(True)
                 connectionResponseThread.start()
                 connections[name] = recieved_address
-                logs.append(
-                    str(datetime.now().time()) + 'Connected to New Star Node: ' + str(name) + ' ' + str(recieved_address))
+                logs.append(str(datetime.now().time()) + 'Connected to New Star Node: ' + str(name) + ' ' + str(recieved_address))
 
 
 class ConnectionResponseThread(threading.Thread):
@@ -394,11 +386,6 @@ class SumThread(threading.Thread):
                 message = str(summedValue)
                 packet = create_packet(PacketType.SUM, message)
                 client_socket.sendto(packet, addr)
-        # if hubNode is not None and summedValue < connectedSums[hubNode]:
-        #     hubNode = my_address
-        #     logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hubNode))
-
-        #send summed value to all the connected nodes
 
 
 class RTTThread(threading.Thread):
@@ -422,19 +409,17 @@ class RTTThread(threading.Thread):
 
 def connect_to_poc(PoC_address, PoC_port):
     global connections, logs
-    #this function contacts the poc and receives all of the information
+    #contact poc and receive the information
     #about the other active nodes
 
     #send a CONNECT_REQ packet to PoC
-    #i get an error when actually using the PacketType enum so I am using
-    #just a string to represent the packet type
     response = None
     received_address = None
     client_socket.settimeout(5)
     received = False
     connect_req_packet = create_packet(PacketType.CONNECT_REQ, message=my_name)
     connection_attempts = 0
-    while not received and connection_attempts <= 12:
+    while not received and connection_attempts <= 10:
         client_socket.sendto(connect_req_packet, (PoC_address, PoC_port))
         try:
             response, received_address = client_socket.recvfrom(65507)
@@ -442,7 +427,7 @@ def connect_to_poc(PoC_address, PoC_port):
         except socket.timeout:
             received = False
             connection_attempts += 1
-    if connection_attempts > 12:
+    if connection_attempts > 10:
         return -1
     packet = json.loads(response.decode('utf-8'))
     type = packet["packetType"]
@@ -456,14 +441,12 @@ def connect_to_poc(PoC_address, PoC_port):
                 connections[new_connection] = tuple(new_connections[new_connection])
     client_socket.settimeout(None)
     return 1
-    #TODO: handle response. add all connections to global dict
 
 
 def connect_to_network():
-    #this function goes through the list of active connections and
+    #goes through the list of active connections and
     #exchanges contact info with all of them so that the whole network is aware
     #that this node is alive now
-    #TODO: make sure this is correct
     for connection in connections:
         connect_req_packet = create_packet(PacketType.CONNECT_REQ, message=my_name)
         addr = connections[connection]
