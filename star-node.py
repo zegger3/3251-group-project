@@ -1,8 +1,42 @@
 import socket
 import argparse
 import sys
+import time
+import json
+import copy
+from datetime import datetime, date
+import pickle
+import threading
 
 selfData = []
+my_name = ''
+my_port = -1
+pocAddress = ''
+pocPort = 0
+maxConnections = 0
+connections = dict() # Key: Server Name, Value: (IP, Port)
+RTTs = dict() # Key: (IP, Port) value: RTT
+startTimes = dict() # Key: (IP, Port) value: startTime for RTT
+connectedSums = dict() # Key: (IP, Port) Value: Sum
+
+hubNode = None
+client_socket = None
+logs = list()
+my_address = (0,0)
+
+
+class PacketType:
+    HEARTBEAT_REQ = 0
+    HEARTBEAT_RES = 1
+    CONNECT_REQ = 2
+    CONNECT_RES = 3
+    RTT_REQ = 4
+    RTT_RES = 5
+    SUM = 6
+    MESSAGE_TEXT = 7
+    MESSAGE_FILE = 8
+    ACK = 9
+
 
 def init():
     global selfData
@@ -12,6 +46,96 @@ def init():
         startupCheck()
     else:
         print("\nStar Node requires an input of exactly 5 arguments.  You gave: " + str(len(sys.argv) - 1) + "\nCorrect input should be of the form: \nstar-node <name> <local-port> <PoC-address> <PoCport> <N> ")
+
+    global my_name, my_port, maxConnections, client_socket, my_address, connections, hubNode, RTTs, logs
+    my_name = selfData[1]
+    my_port = int(selfData[2])
+    poc_address = selfData[3]
+    poc_port = int(selfData[4])
+    maxConnections = int(selfData[5])
+
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    my_ip = socket.gethostbyname(socket.getfqdn()) 
+    my_address = (my_ip, my_port)
+    client_socket.bind(('', my_port))
+
+    #Try to connect to POC, if address is 0, keep running until another node connects to this one. (TODO)
+    if (poc_address == '0'):
+        print("TODO")
+    else:
+        connected = connect_to_poc(poc_address, poc_port)
+        if connected == -1:
+            print("failed to connect to PoC after 1 minute.")
+            print("check that PoC is online.")
+            sys.exit()
+        #if successful then we should have access to all of the active connections
+        #in the network via the poc so connect to all of them
+        connect_to_network()
+
+        #Peer discovery is completed. We can now start calculating RTT and find the
+        #hub node
+
+    recivingThread = ReceivingThread(0, "Recieving Thread")
+    recivingThread.setDaemon(True)
+    recivingThread.start()
+
+     #----------------------------------
+    #TODO: do RTT stuff and find hub
+    #----------------------------------
+    rttThread = RTTThread(11, "rttThread")
+    rttThread.setDaemon(True)
+    rttThread.start()
+
+
+    #TODO:
+    #send/receive messages, do RTT measurements,
+    #Heartbeat stuff, and handle commands by the user
+    command = input("Star-Node Command: ")
+
+    while not command == 'disconnect':
+
+        if command == 'show-status':
+            print("Status ================")
+            print(connections)
+            for x in connections:
+                print(x + " : " + str(connections[x]) + " : " + str(RTTs[connections[x]]))
+
+            print("Hub Node: " + str(hubNode))
+            for x in connections:
+                if connections[x] == hubNode:
+                    print(x)
+                    break
+        elif 'send' in command:
+            # sending data logic
+
+            info = command[5:]
+            if hubNode is None or hubNode == my_address:
+                addresses = connections.values()
+            else:
+                addresses = [hubNode]
+            if "\"" in info:
+                parsed_message = str(info[1:-1])
+
+                messageThread = SendMessageThread(0, 'Send Message', parsed_message, addresses)
+                messageThread.setDaemon(True)
+                messageThread.start()
+            else:
+                file = open(info, "rb")
+                file_data = file.read()
+                file.close()
+
+                fileSendThread = SendFileThread(0, 'Send File', file_data, addresses)
+                fileSendThread.setDaemon(True)
+                fileSendThread.start()
+        elif command == 'show-log':
+            for log in logs:
+                print(log)
+
+        command = input("Star-Node Command: ")
+
+    print("disconnecting")
+    sys.exit()
+    #TODO handle the disconnect command
     
 def startupCheck():
     name = selfData[1]
@@ -30,12 +154,7 @@ def startupCheck():
         checkList[1] = True
         print("Local Port #, CHECK")
         
-    try:
-       POC_Addr = socket.inet_aton(POC_Addr)
-       print("legal IP Address, CHECK")
-       checkList[2] = True
-    except socket.error:
-        print("Not a legal IP Address")
+    
     
     if( type(POC_Port) is int):
         checkList[3] = True
@@ -49,225 +168,308 @@ def startupCheck():
             return
     
     print("Input is good. Launching Node.")
-    
-def starNode():
-    print("Initializing Threads")
-    
-    
-def udpClient():
-    UDP_IP = input("IP address? ")
-    UDP_PORT = input("Port #? ")
-    udpLoop = 1
 
-    while (udpLoop == 1):
-            
-        MESSAGE = input("Please input the equation. \nThe only supported operations are +, -, /, and *. \nNegative digits are allowed, as are decimals. \nMaximum of 15 characters per number. ")
-
-
-        if(MESSAGE.upper() == 'QUIT'):
-            udpLoop = 0
-            print("Bye")
-            break;
-        print( "UDP target IP:", UDP_IP)
-        print( "UDP target port:", UDP_PORT)
-        print( "message:", MESSAGE)
-
-        firstSign = 0
-        secondSign = 0
-        add = MESSAGE.find('+')
-        sub = MESSAGE.find('-')
-        mult = MESSAGE.find('*')
-        div = MESSAGE.find('/')
-        
-        if(sub == 0):
-            firstSign = -1
-            sub = MESSAGE[1:].find('-')
-            if(sub > -1):
-                sub +=1
-        operList = []
-        if(add > -1):
-            operList.append(add)
-        if(sub > -1):
-            operList.append(sub)
-        if(mult > -1):
-            operList.append(mult)
-        if(div > -1):
-            operList.append(div)
-        
-        oper= min(operList)
-        
-        
-        firstNum = MESSAGE[0-firstSign : oper]
-        
-        symbol = MESSAGE[oper:oper+1]
-        
-        if( symbol == '-' ):
-            if(MESSAGE[oper+1:oper+2] != '-'):
-                secondNum = MESSAGE[oper+1:]
-            else:
-                secondNum = MESSAGE[oper+2:]
-        else:
-            if(MESSAGE[oper+1:oper+2] != '-'):
-                secondNum = MESSAGE[oper+1:]
-            else:
-                secondSign = -1
-                secondNum = MESSAGE[oper+2:]
-            
-        clientMessage = ""
-        
-        if(firstSign == -1):
-            clientMessage += '-'
-        else:
-            clientMessage += '+'
-            
-        firstPad = ''
-        
-        while( len(firstPad) < 15 - len(firstNum) ):
-            firstPad += '0'
-            
-        if(firstNum.find('.') == -1):
-            clientMessage = clientMessage + firstPad + firstNum
-        else:
-            clientMessage = clientMessage + firstNum + firstPad
-        
-        if(secondSign == -1):
-            clientMessage += '-'
-        else:
-            clientMessage += '+'
-            
-        secondPad = ''
-        while( len(secondPad) < 15 - len(secondNum) ):
-            secondPad += '0'
-        if(secondNum.find('.') == -1):
-            clientMessage = clientMessage + secondPad + secondNum
-        else:
-            clientMessage = clientMessage + secondNum + secondPad
-        
-        clientMessage += symbol
-        
-        
-        encMessage = str.encode(clientMessage)
-        print( encMessage )
-
-        sock = socket.socket(socket.AF_INET, # Internet
-                             socket.SOCK_DGRAM) # UDP
-        sock.sendto(encMessage, (UDP_IP, int(UDP_PORT)))
-
-        recvLoop = 1
-        while recvLoop:
-            data, addr = sock.recvfrom(1024)
-            if data:
-                print(data.decode())
-                recvLoop = 0
-
-
-
-def udpServ():
-    UDP_IP = input("IP address? ")
-    UDP_PORT = input("Port #? ")
-    udpLoop = 1
-    sock = socket.socket(socket.AF_INET, # Internet
-                         socket.SOCK_DGRAM) # UDP
-    sock.bind((UDP_IP, int(UDP_PORT)))
-
-    while(udpLoop == 1):
-        data, addr = sock.recvfrom(1024) # buffer size is 1024 bytes
-        if not data: break
-
-        print( "received data: ", data)
-        
-        clientMessage = data.decode()
-        if(clientMessage.upper() == 'quit'):
-            tcpLoop = 0
-            break;
-        firstNum = clientMessage[:16]
-        secondNum = clientMessage[16:32]
-        oper = clientMessage[32:]
-
-        if(firstNum[:1] == '-'):
-            if(firstNum.find('.') > -1):
-                firstNum = float(firstNum[1:]) * -1
-            else:
-                firstNum = int(firstNum[1:]) * -1
-        else:
-            if(firstNum.find('.') > -1):
-                firstNum = float(firstNum[1:])
-            else:
-                firstNum = int(firstNum[1:])
-
-        if(secondNum[:1] == '-'):
-            if(secondNum.find('.') > -1):
-                secondNum = float(secondNum[1:]) * -1
-            else:
-                secondNum = int(secondNum[1:]) * -1
-        else:
-            if(secondNum.find('.') > -1):
-                secondNum = float(secondNum[1:])
-            else:
-                secondNum = int(secondNum[1:])
-
-        if(oper == '+'):
-            result = firstNum + secondNum
-        elif(oper == '-'):
-            result = firstNum - secondNum
-        elif(oper == '*'):
-            result = firstNum * secondNum
-        elif(oper == '/'):
-            result = firstNum / secondNum
-        else:
-            result = "ERR"
-
-        result= str(result)
-        
-        if(result != "ERR"):
-            resultSign = '+'                
-            resultPad = ""
-            if(result[:1] == '-'):
-                resultSign = '-'
-                result = result[1:]
-                
-            while( len(resultPad) <= 15 - len(result)):
-                resultPad += '0'
-
-            if(result.find('.') > -1):
-                resultMessage = resultSign + result + resultPad
-            else:
-                resultMessage = resultSign + resultPad + result
-
-            resultMessage += "\nMade by: Kyle Hosford \n\n"
-                
-        else:
-            resultMessage = "ERR: unknown operator Only use +, -, *, / please"
-
-        sock.sendto(str.encode(resultMessage), addr)
-    
-
-
-
-def main():
-    usrInput = input("Client? or Server?")
-
-    if(usrInput.upper() == "CLIENT" ):
-        usrInput = input("TCP? or UDP?")
-
-        if(usrInput.upper() == "UDP"):
-            udpClient()
-        else:
-            print("it's not hard. Type 'UDP' or 'TCP' next time")
-            main()
-    elif(usrInput.upper() == "SERVER"):
-        usrInput = input("TCP? or UDP?")
-
-        if(usrInput.upper() == "UDP"):
-            udpServ()
-        else:
-            print("it's not hard. Type 'UDP' or 'TCP' next time")
-            main()
+def create_packet(packet_type, message=None):
+    packet = dict()
+    packet['packetType'] = packet_type
+    if not message is None:
+        packet['message'] = message
+        packet['messageLength'] = len(message)
     else:
-        print("Bad input. Please type 'client' or 'server'")
-        main()
+        packet['messageLength'] = 0
+
+    packet_data = json.dumps(packet)
+    return packet_data.encode('utf-8')
 
 
+#made a seperate function to create file packets
+#because json would not serialize them
+def create_file_packet(file):
+    packet = dict()
+    packet['packetType'] = PacketType.MESSAGE_FILE
+    checksum = 0
+    packet['message'] = file
+    packet_data = pickle.dumps(packet)
+    return packet_data
+
+
+class ReceivingThread(threading.Thread):
+    def __init__(self, threadID, name):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+
+    def run(self):
+        global connections, RTTs, connectedSums, hubNode, startTimes, logs
+        rttReceived = 0
+
+        while True:
+            data, recieved_address = client_socket.recvfrom(64000)
+
+            #parsing of all recieved messages occurs here
+            try:
+                packet = json.loads(data.decode('utf-8'))
+            except Exception as e:
+                packet = pickle.loads(data)
+
+            packet_type = packet['packetType']
+
+            if packet_type == PacketType.SUM:
+                message = packet['message']
+                sent_sum = float(message)
+                connectedSums[recieved_address] = sent_sum
+                logs.append(str(datetime.now().time()) + ' SUM Value Recieved: ' + str(sent_sum) + ' ' + str(recieved_address))
+
+                if len(connectedSums) == len(connections) + 1 and len(connections) > 1:
+                    if hubNode is None:
+                        minAddress = None
+                        minSum = sys.maxsize
+                        for connectedSum in connectedSums:
+                            if connectedSums[connectedSum] < minSum:
+                                minSum = connectedSums[connectedSum]
+                                minAddress = connectedSum
+
+                        hubNode = minAddress
+                        logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hubNode))
+
+                    else:
+                        minAddress = None
+                        minSum = sys.maxsize
+                        for connectedSum in connectedSums:
+                            if connectedSums[connectedSum] < minSum:
+                                minSum = connectedSums[connectedSum]
+                                minAddress = connectedSum
+
+                        if not (minAddress == hubNode):
+
+                            if connectedSums[hubNode] * .9 > minSum:
+
+                                hubNode = minAddress
+                                logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hubNode))
+
+
+            elif packet_type == PacketType.RTT_RES:
+                logs.append(
+                    str(datetime.now().time()) + ' RTT Response Recieved: ' + str(recieved_address))
+
+                start_time = startTimes[recieved_address]
+                end_time = datetime.now().time()
+                rtt = (datetime.combine(date.today(), end_time) - datetime.combine(date.today(), start_time)).total_seconds() * 1000
+                RTTs[recieved_address] = rtt
+                rttReceived += 1
+
+                if (len(connections) == len(RTTs) and rttReceived == len(connections)):
+                    sendSumThread = SumThread(10, 'SendSumThread')
+                    sendSumThread.setDaemon(True)
+                    sendSumThread.start()
+                    rttReceived = 0
+
+            elif packet_type == PacketType.RTT_REQ:
+                logs.append(str(datetime.now().time()) + ' RTT Request Recieved: ' + str(recieved_address))
+
+                rttResponseThread = RTTResponseThread(0, 'RTTResponseThread', recieved_address)
+                rttResponseThread.start()
+
+            elif packet_type == PacketType.MESSAGE_TEXT:
+                logs.append(str(datetime.now().time()) + ' Message Recieved: ' + str(recieved_address) + ' : ' + str(packet['message']))
+                print("new message received from " + str(recieved_address) + ": "+ str(packet['message']))
+                if hubNode == my_address:
+                    addresses = []
+                    for connection in connections:
+                        if not connections[connection] == recieved_address:
+                            addresses.append(connections[connection])
+                    logs.append(str(datetime.now().time()) + ' Message Forwarded: ' + str(addresses))
+                    sendMessage = SendMessageThread(0, 'SendMessageThread', packet['message'], addresses)
+                    sendMessage.setDaemon(True)
+                    sendMessage.start()
+            elif packet_type == PacketType.MESSAGE_FILE:
+                logs.append(str(datetime.now().time()) + ' File Recieved: ' + str(recieved_address))
+                print("new file received from " + str(recieved_address))#don't want to print the whole file #+ ": "+ str(packet['message']))
+                if hubNode == my_address:
+                    addresses = []
+                    for connection in connections:
+                        if not connections[connection] == recieved_address:
+                            addresses.append(connections[connection])
+                    logs.append(str(datetime.now().time()) + ' Message Forwarded: ' + str(addresses))
+
+                    sendFile = SendFileThread(0, 'SendFileThread', packet['message'], addresses)
+                    sendFile.setDaemon(True)
+                    sendFile.start()
+
+            elif packet_type == PacketType.CONNECT_REQ:
+
+                name = packet['message']
+
+                sent_connections = copy.deepcopy(connections)
+                sent_connections[my_name] = None
+
+                connectionResponseThread = ConnectionResponseThread(0, 'Connection Response', recieved_address, sent_connections)
+                connectionResponseThread.setDaemon(True)
+                connectionResponseThread.start()
+                connections[name] = recieved_address
+                logs.append(
+                    str(datetime.now().time()) + 'Connected to New Star Node: ' + str(name) + ' ' + str(recieved_address))
+
+
+class ConnectionResponseThread(threading.Thread):
+    def __init__(self, threadID, name, address, message):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+        self.address = address
+        self.message = message
+
+    def run(self):
+        packet = create_packet(PacketType.CONNECT_RES, self.message)
+        client_socket.sendto(packet, self.address)
+
+
+class SendMessageThread(threading.Thread):
+    def __init__(self, threadID, name, message, addresses):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+        self.addresses = addresses
+        self.message = message
+
+    def run(self):
+        global logs
+        packet = create_packet(PacketType.MESSAGE_TEXT, self.message)
+        for address in self.addresses:
+            client_socket.sendto(packet, address)
+            logs.append(str(datetime.now().time()) + ' Message Sent: ' + str(address))
+
+
+class SendFileThread(threading.Thread):
+    def __init__(self, threadID, name, file, addresses):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+        self.addresses = addresses
+        self.file = file
+
+    def run(self):
+        global logs
+        packet = create_file_packet(self.file)
+        for address in self.addresses:
+            client_socket.sendto(packet, address)
+            logs.append(str(datetime.now().time()) + ' File Sent: ' + str(address))
+
+
+class RTTResponseThread(threading.Thread):
+    def __init__(self, threadID, name, address):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+        self.address = address
+
+    def run(self):
+        global logs
+        packet = create_packet(PacketType.RTT_RES)
+        logs.append(str(datetime.now().time()) + ' RTT Response Sent: ' + str(self.address))
+
+        client_socket.sendto(packet, self.address)
+
+
+class SumThread(threading.Thread):
+    def __init__(self, threadID, name):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+
+    def run(self):
+        global connections, RTTs, connectedSums, hubNode, logs
+
+        summedValue = 0
+        for rtt in RTTs:
+            value = RTTs[rtt]
+            summedValue += value
+        logs.append(str(datetime.now().time()) + ' SUM Calculated: ' + str(summedValue))
+
+
+        if not (summedValue == 0):
+            connectedSums[my_address] = summedValue
+            for connection in connections:
+                addr = connections[connection]
+                message = str(summedValue)
+                packet = create_packet(PacketType.SUM, message)
+                client_socket.sendto(packet, addr)
+        # if hubNode is not None and summedValue < connectedSums[hubNode]:
+        #     hubNode = my_address
+        #     logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hubNode))
+
+        #send summed value to all the connected nodes
+
+
+class RTTThread(threading.Thread):
+    def __init__(self, threadID, name):
+        threading.Thread.__init__(self)
+        self.threadID = threadID
+        self.name = name
+
+    def run(self):
+        global connections, startTimes, logs
+        while True:
+            for connection in connections:
+                addr = connections[connection]
+                startTimes[addr] = datetime.now().time()
+                packet = create_packet(PacketType.RTT_REQ)
+                client_socket.sendto(packet, addr)
+                logs.append(str(datetime.now().time()) + ' RTT Request Sent: ' + str(addr))
+
+            time.sleep(5)
+
+
+def connect_to_poc(PoC_address, PoC_port):
+    global connections, logs
+    #this function contacts the poc and receives all of the information
+    #about the other active nodes
+
+    #send a CONNECT_REQ packet to PoC
+    #i get an error when actually using the PacketType enum so I am using
+    #just a string to represent the packet type
+    response = None
+    received_address = None
+    client_socket.settimeout(5)
+    received = False
+    connect_req_packet = create_packet(PacketType.CONNECT_REQ, message=my_name)
+    connection_attempts = 0
+    while not received and connection_attempts <= 12:
+        client_socket.sendto(connect_req_packet, (PoC_address, PoC_port))
+        try:
+            response, received_address = client_socket.recvfrom(65507)
+            received = True
+        except socket.timeout:
+            received = False
+            connection_attempts += 1
+    if connection_attempts > 12:
+        return -1
+    packet = json.loads(response.decode('utf-8'))
+    type = packet["packetType"]
+    if type == PacketType.CONNECT_RES:
+        new_connections = packet["message"]
+        for new_connection in new_connections:
+            logs.append(str(datetime.now().time()) + 'Connected to New Star Node: ' + str(new_connection) + ' ' + str(new_connections[new_connection]))
+            if new_connections[new_connection] is None:
+                connections[new_connection] = received_address
+            else:
+                connections[new_connection] = tuple(new_connections[new_connection])
+    client_socket.settimeout(None)
+    return 1
+    #TODO: handle response. add all connections to global dict
+
+
+def connect_to_network():
+    #this function goes through the list of active connections and
+    #exchanges contact info with all of them so that the whole network is aware
+    #that this node is alive now
+    #TODO: make sure this is correct
+    for connection in connections:
+        connect_req_packet = create_packet(PacketType.CONNECT_REQ, message=my_name)
+        addr = connections[connection]
+        client_socket.sendto(connect_req_packet, addr)
+        #dont really need to do anything with the response just make sure that
+        #there actually was one
 
 init()
 
