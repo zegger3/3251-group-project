@@ -25,7 +25,5 @@ disconnect
 
 Known bugs/limitations:
 
-If an improper command is sent such as "send Hi, how are you?"" (missing the first quotation mark for the message),
-the current node will break and a new one will have to be started. Since we weren't supposed to account for churn
-yet for this milestone, the old node is not removed from the connections list. So if one node breaks, all nodes need to be disconnected and restarted.
+All thats left to be implemented is the handling of duplicate packets and handling the removal of a node from the network on a disconnect.
 
