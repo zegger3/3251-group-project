@@ -81,7 +81,7 @@ def init():
     heartbeat.setDaemon(True)
     heartbeat.start()
 
-    command = input("Command: ")
+    command = raw_input("Command: ")
 
     while not command == 'disconnect':
         if 'send' in command:
@@ -120,7 +120,7 @@ def init():
             for log in logs:
                 print(log)
         #prepare to take next command
-        command = input("Command: ")
+        command = raw_input("Command: ")
 
     print("disconnecting")
     sys.exit()
