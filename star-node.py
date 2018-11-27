@@ -81,7 +81,7 @@ def init():
     heartbeat.setDaemon(True)
     heartbeat.start()
 
-    command = raw_input("Command: ")
+    command = input("Command: ")
 
     while not command == 'disconnect':
         if 'send' in command:
@@ -120,7 +120,7 @@ def init():
             for log in logs:
                 print(log)
         #prepare to take next command
-        command = raw_input("Command: ")
+        command = input("Command: ")
 
     print("disconnecting")
     sys.exit()
@@ -453,7 +453,12 @@ class RequestHeartbeat(threading.Thread):
 
                 if (elapsed > 15):
                     logs.append(str(datetime.now().time()) + ' Node offline: ' + str(addr))
+
+                    print("Node is offline")
+                    disconnectNode(connection)
+
                     print("Node " + str(addr) + " is offline")
+
 
             packet = create_packet("HEARTBEAT_REQUEST")
             for connection in connections.values():
@@ -462,6 +467,26 @@ class RequestHeartbeat(threading.Thread):
 
             #connectionsLock.release()
             time.sleep(4)
+
+#method to disconnect the desired node, represented as an index.  If no node is specified, it deletes itself            
+def disconnectNode(node=None):
+    if node != None:
+        global connections, startTimes, RTTs, connectedSums, Ack, Heartbeats
+        #pop modifies the dictionary IN-PLACE, better for this case than del()
+        if node in connections.keys():
+            connections.pop(node)
+        if node in startTimes.keys():
+            startTimes.pop(node)
+        if node in RTTs.keys():
+            RTTs.pop(node)
+        if node in connectedSums.keys():
+            connectedSums.pop(node)
+        if node in Ack.keys():
+            Ack.pop(node)
+        if node in Heartbeats.keys():
+            Heartbeats.pop(node)
+    else:
+        print("TODO: delete self")
 
 #creates a heartbeat response packet and sends it to the node which requested it.
 class SendHeartbeat(threading.Thread):
