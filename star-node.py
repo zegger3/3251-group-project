@@ -290,7 +290,7 @@ class ReceivePackets(threading.Thread):
                 name = packet['message']
 
                 sent_connections = copy.deepcopy(connections)
-                sent_connections[name] = None
+                sent_connections[name] = my_address
 
                 ConnectionResponseThread = RespondToConnection(0, 'Connection Response', received_addr, sent_connections)
                 ConnectionResponseThread.setDaemon(True)
@@ -466,27 +466,54 @@ class RequestHeartbeat(threading.Thread):
                 client_socket.sendto(packet, connection)
 
             connectionsLock.release()
-            time.sleep(4)
+            time.sleep(1)
 
 #method to disconnect the desired node, represented as an index.  If no node is specified, it deletes itself            
-def disconnectNode(node=None):
+def disconnectNode(node = None):
     if node != None:
-        global connections, startTimes, RTTs, connectedSums, Ack, Heartbeats
+        global connections, starts, RTTs, sums, Ack, Heartbeats, hub
+
+        connectionsLock.acquire()
+        connection_to_delete = -1
+        delete = False
+        for x in connections:
+            if connections[x] == node:
+                delete = True
+                connection_to_delete = x
+        if delete:
+            del connections[connection_to_delete]
+        connectionsLock.release()
+
         #pop modifies the dictionary IN-PLACE, better for this case than del()
-        if node in connections.keys():
-            connections.pop(node)
-        if node in startTimes.keys():
-            startTimes.pop(node)
+        if node in starts.keys():
+            starts.pop(node)
         if node in RTTs.keys():
             RTTs.pop(node)
-        if node in connectedSums.keys():
-            connectedSums.pop(node)
+        if node in sums.keys():
+            sums.pop(node)
         if node in Ack.keys():
             Ack.pop(node)
         if node in Heartbeats.keys():
             Heartbeats.pop(node)
     else:
         print("TODO: delete self")
+
+    if (len(connections) < 2):
+        hub = None
+
+    if hub == node:
+        # recalculate hub node
+        minAddress = None
+        minSum = sys.maxsize
+        sumsLock.acquire()
+        for x in Sums:
+            if sums[x] < minSum:
+                minSum = sums[x]
+                minAddress = x
+        sumsLock.release()
+
+        hub = minAddress
+        logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hub))
 
 #creates a heartbeat response packet and sends it to the node which requested it.
 class SendHeartbeat(threading.Thread):
@@ -570,10 +597,8 @@ def connect(PoC_address, PoC_port):
         connectionsLock.acquire()
         for new_connection in new_connections:
             logs.append(str(datetime.now().time()) + 'Connected to New Node: ' + str(new_connection) + ' ' + str(new_connections[new_connection]))
-            if new_connections[new_connection] is None:
-                connections[new_connection] = received_addr
-            else:
-                connections[new_connection] = tuple(new_connections[new_connection])
+            connections[new_connection] = tuple(new_connections[new_connection])
+                
 
         HeartbeatsLock.acquire()
         for connection in connections.values():
