@@ -444,7 +444,7 @@ class RequestHeartbeat(threading.Thread):
     def run(self):
         global connections, logs, Heartbeats
         while 1:
-            connectionsLock.acquire
+            connectionsLock.acquire()
             for connection in connections:
                 addr = connections[connection]
                 start = Heartbeats[addr]
@@ -460,7 +460,7 @@ class RequestHeartbeat(threading.Thread):
                 logs.append(str(datetime.now().time()) + ' Sent Heartbeat Request: ' + str(connection))
                 client_socket.sendto(packet, connection)
 
-            #connectionsLock.release()
+            connectionsLock.release()
             time.sleep(4)
 
 #creates a heartbeat response packet and sends it to the node which requested it.
