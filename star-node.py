@@ -123,6 +123,10 @@ def init():
         command = raw_input("Command: ")
 
     print("disconnecting")
+    disconnect_packet = create_packet("DISCONNECT")
+    for x in connections.values():
+        client_socket.sendto(disconnect_packet, x)
+    client_socket.close()
     sys.exit()
 
 def startupCheck():
@@ -310,6 +314,9 @@ class ReceivePackets(threading.Thread):
 
                 logs.append(str(datetime.now().time()) + 'Connected to New Node: ' + str(name) + ' ' + str(received_addr))
 
+            elif packet_type == "DISCONNECT":
+                logs.append(str(datetime.now().time()) + ' Received DISCONNECT Packet: ' + str(received_addr))
+                disconnectNode(received_addr)
 
             elif packet_type == "HEARTBEAT_REQUEST":
                 logs.append(str(datetime.now().time()) + ' Received Heartbeat Request: ' + str(received_addr))
@@ -453,11 +460,8 @@ class RequestHeartbeat(threading.Thread):
 
                 if (elapsed > 15):
                     logs.append(str(datetime.now().time()) + ' Node offline: ' + str(addr))
-
-                    print("Node is offline")
                     disconnectNode(connection)
 
-                    print("Node " + str(addr) + " is offline")
 
 
             packet = create_packet("HEARTBEAT_REQUEST")
@@ -469,44 +473,23 @@ class RequestHeartbeat(threading.Thread):
             time.sleep(1)
 
 #method to disconnect the desired node, represented as an index.  If no node is specified, it deletes itself            
-def disconnectNode(node = None):
-    if node != None:
-        global connections, starts, RTTs, sums, Ack, Heartbeats, hub
-
-        connectionsLock.acquire()
-        connection_to_delete = -1
-        delete = False
-        for x in connections:
-            if connections[x] == node:
-                delete = True
-                connection_to_delete = x
-        if delete:
-            del connections[connection_to_delete]
-        connectionsLock.release()
-
-        #pop modifies the dictionary IN-PLACE, better for this case than del()
-        if node in starts.keys():
-            starts.pop(node)
-        if node in RTTs.keys():
-            RTTs.pop(node)
-        if node in sums.keys():
-            sums.pop(node)
-        if node in Ack.keys():
-            Ack.pop(node)
-        if node in Heartbeats.keys():
-            Heartbeats.pop(node)
-    else:
-        print("TODO: delete self")
+def disconnectNode(addr):
+    global logs, connections, starts, RTTs, sums, Ack, Heartbeats, hub
 
     if (len(connections) < 2):
         hub = None
 
-    if hub == node:
+    if addr in sums.keys():
+        sumsLock.acquire()
+        sums.pop(addr)
+        sumsLock.release()
+
+    if hub == addr:
         # recalculate hub node
         minAddress = None
         minSum = sys.maxsize
         sumsLock.acquire()
-        for x in Sums:
+        for x in sums:
             if sums[x] < minSum:
                 minSum = sums[x]
                 minAddress = x
@@ -514,6 +497,7 @@ def disconnectNode(node = None):
 
         hub = minAddress
         logs.append(str(datetime.now().time()) + ' Hub Node Updated: ' + str(hub))
+
 
 #creates a heartbeat response packet and sends it to the node which requested it.
 class SendHeartbeat(threading.Thread):
@@ -575,9 +559,9 @@ def connect(PoC_address, PoC_port):
     #send a CONNECT_REQUEST packet to PoC
     response = None
     received_addr = None
-    client_socket.settimeout(5)
+    client_socket.settimeout(10)
     received = False
-    CONNECT_REQUEST_packet = create_packet("CONNECT_REQUEST", message=name)
+    CONNECT_REQUEST_packet = create_packet("CONNECT_REQUEST", message = name)
     connection_attempts = 0
     while not received and connection_attempts <= 10:
         client_socket.sendto(CONNECT_REQUEST_packet, (PoC_address, PoC_port))
@@ -599,7 +583,6 @@ def connect(PoC_address, PoC_port):
             logs.append(str(datetime.now().time()) + 'Connected to New Node: ' + str(new_connection) + ' ' + str(new_connections[new_connection]))
             connections[new_connection] = tuple(new_connections[new_connection])
                 
-
         HeartbeatsLock.acquire()
         for connection in connections.values():
             Heartbeats[connection] = datetime.now().time()
